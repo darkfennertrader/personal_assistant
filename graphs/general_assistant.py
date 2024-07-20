@@ -1,4 +1,5 @@
 # %%
+from datetime import datetime
 import operator
 from typing import Annotated, TypedDict, List, Literal, Dict, Any, Optional, Union
 from pathlib import Path
@@ -7,6 +8,7 @@ import requests
 from openai import OpenAI
 from langchain_openai import ChatOpenAI
 from langchain.agents import tool
+from langchain_core.prompts import PromptTemplate
 from langchain_core.messages import SystemMessage, HumanMessage, AnyMessage, ToolMessage
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_core.pydantic_v1 import BaseModel, Field, validator
@@ -14,6 +16,7 @@ from IPython.display import Image, display
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.prebuilt import ToolExecutor, ToolInvocation
 from langgraph.graph import StateGraph, END
+from graphs.prompt import PERSONAL_ASSISTANT
 
 
 VISION_MODEL = "dall-e-3"
@@ -107,10 +110,9 @@ def generate_tools(
 
 class Agent:
 
-    def __init__(self, _model, _checkpointer, _system="") -> None:
+    def __init__(self, _model, _checkpointer, _system=PERSONAL_ASSISTANT) -> None:
         self.model = _model
         self.system = _system
-
         graph = StateGraph(AgentState)
         graph.add_node("llm", self.call_openai)  # type: ignore
         graph.add_node("action", self.take_action)  # type: ignore
@@ -131,8 +133,9 @@ class Agent:
         # print(state)
         # print(config)
         messages = state["messages"]
-        if self.system:
-            messages = [SystemMessage(content=self.system)] + messages
+        today = datetime.now().date()
+        self.system = self.system.partial(today=str(today))
+        messages = [SystemMessage(content=self.system.format())] + messages
 
         tools = [
             st_client,
@@ -190,21 +193,14 @@ class Agent:
 
 if __name__ == "__main__":
 
-    system_prompt = """
-    You are a smart research assistant. Use the search engine to look up information. \
-    You are also capable of generating images based on the user prompt. \
-    You are allowed to make multiple calls (either together or in sequence). \
-    Only look up information when you are sure of what you want. \
-    If you need to look up some information before asking a follow up question, you are allowed to do that!
-    """
     size = "1024x1024"
     quality = "standard"
     style = "vivid"
 
     model = ChatOpenAI(model="gpt-4o", streaming=True)
-    chatbot = Agent(_model=model, _checkpointer=memory, _system=system_prompt)
+    chatbot = Agent(_model=model, _checkpointer=memory, _system=PERSONAL_ASSISTANT)
 
-    # display(Image(chatbot.graph.get_graph().draw_png()))  # type: ignore
+    display(Image(chatbot.graph.get_graph().draw_png()))  # type: ignore
 
     # %%
 
@@ -216,8 +212,10 @@ if __name__ == "__main__":
         "style": style,
         "output": Response,
     }
-    query = "What is the weather in Milan and Rome?"
-    query = "a mocking image of the Italian football squad elimination from Switzerland at Euro 2024"
+    query = "Who won the Euro2024 football competition?"
+    query = "How many European championships has Spain won and against whom?"
+    query = "what day is today?"
+    # query = "a mocking image of the Italian football squad elimination from Switzerland at Euro 2024"
     # query = "Who won the SuperBowl in 2024? What is the GDP of that state?"
     messages = [HumanMessage(content=query)]
 

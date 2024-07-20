@@ -16,7 +16,7 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 from elevenlabs import play, stream, Voice, VoiceSettings
 from elevenlabs.client import ElevenLabs
 from graphs.general_assistant import Agent, memory
-from graphs.prompt import GENERAL_ASSISTANT
+from graphs.prompt import PERSONAL_ASSISTANT
 
 el_client = ElevenLabs()
 client = OpenAI()
@@ -45,7 +45,7 @@ voice_mapping = {
 }
 
 model = ChatOpenAI(model="gpt-4o", streaming=True)
-chatbot = Agent(_model=model, _checkpointer=memory, _system=GENERAL_ASSISTANT)
+chatbot = Agent(_model=model, _checkpointer=memory, _system=PERSONAL_ASSISTANT)
 
 
 def streaming_mode(content, no_chunks=1):
