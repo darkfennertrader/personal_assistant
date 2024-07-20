@@ -1,0 +1,126 @@
+# %%
+
+import operator
+from typing import Annotated, TypedDict, List, Literal
+from openai import OpenAI
+
+from langchain_openai import ChatOpenAI
+from langchain.agents import tool
+from langchain_core.messages import SystemMessage, HumanMessage, AnyMessage, ToolMessage
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.graph import MessageGraph, StateGraph, END
+import streamlit as st
+from elevenlabs.client import ElevenLabs
+from elevenlabs import play, stream, save, Voice, VoiceSettings
+from IPython.display import Image, display
+
+VISION_MODEL = "dall-e-3"
+
+openai_client = OpenAI()
+t2s_client = ElevenLabs()
+st_client = TavilySearchResults(max_results=3)
+memory = SqliteSaver.from_conn_string(":memory:")
+
+
+class AgentState(TypedDict):
+    messages: Annotated[List[AnyMessage], operator.add]
+
+
+@tool("generate_image", return_direct=False)
+def generate_image(
+    text: str,
+    size: Literal["256x256", "512x512", "1024x1024", "1792x1024", "1024x1792"],
+    quality: Literal["standard", "hd"],
+    style: Literal["vivid", "natural"],
+):
+    """This tool generates an image based on the user prompt"""
+    response = openai_client.images.generate(
+        model=VISION_MODEL, prompt=text, size=size, quality=quality, style=style, n=1
+    )
+    return response.data[0].url
+
+
+agent_tools = [st_client, generate_image]
+
+
+@st.cache_resource
+class Agent:
+
+    def __init__(self, _model, _tools, _checkpointer, _system="") -> None:
+        self.system = _system
+        graph = StateGraph(AgentState)
+        graph.add_node("llm", self.call_openai)
+        graph.add_node("action", self.take_action)
+        graph.add_conditional_edges(
+            "llm", self.exixt_action, {True: "action", False: END}
+        )
+        graph.add_edge("action", "llm")
+        graph.set_entry_point("llm")
+        self.graph = graph.compile(checkpointer=_checkpointer)
+        self.tools = {t.name: t for t in _tools}
+        self.model = _model.bind_tools(_tools)
+
+    def exixt_action(self, state: AgentState):
+        result = state["messages"][-1]
+        return len(result.tool_calls) > 0  # type: ignore
+
+    def call_openai(self, state: AgentState):
+        messages = state["messages"]
+        print("\n", "*" * 50)
+        print(state)
+        print("*" * 50)
+        if self.system:
+            messages = [SystemMessage(content=self.system)] + messages
+        message = self.model.invoke(messages)
+        print("from call_openai:")
+        print(message)
+        return {"messages": [message]}
+
+    def take_action(self, state: AgentState):
+        tool_calls = state["messages"][-1].tool_calls  # type: ignore
+        results = []
+        for t in tool_calls:
+            print(f"Calling: {t}")
+            result = self.tools[t["name"]].invoke(t["args"])
+            results.append(
+                ToolMessage(
+                    tool_call_id=t["id"],  # type:ignore
+                    name=t["name"],
+                    content=str(result),
+                )
+            )
+        print("Back to the model")
+        return {"messages": results}
+
+
+if __name__ == "__main__":
+
+    prompt = """
+    You are a smart research assistant. Use the search engine to look up information. \
+    You are also capable of generating an image based on the user prompt. \
+    You are allowed to make multiple calls (either together or in sequence). \
+    Only look up information when you are sure of what you want. \
+    If you need to look up some information before asking a follow up question, you are allowed to do that!
+    """
+
+    model = ChatOpenAI(model="gpt-4o")
+    chatbot = Agent(
+        _model=model, _tools=agent_tools, _checkpointer=memory, _system=prompt
+    )
+
+    # display(Image(chatbot.graph.get_graph().draw_png()))  # type: ignore
+
+    # %%
+
+    # different threads inside the checkpointer for multiple conversation
+    thread = {"configurable": {"thread_id": "1"}}
+    query = "What is the weather in Milan and Rome?"
+    query = "generate an image of a red cat"
+    # query = "Who won the SuperBowl in 2024? What is the GDP of that state?"
+    messages = [HumanMessage(content=query)]
+
+    result = chatbot.graph.invoke({"messages": messages}, thread)  # type: ignore
+
+    print()
+    print(result["messages"][-1].content)
